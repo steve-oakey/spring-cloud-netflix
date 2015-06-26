@@ -16,21 +16,25 @@
 
 package org.springframework.cloud.netflix.eureka;
 
+import static com.netflix.appinfo.InstanceInfo.PortType.SECURE;
+import static com.netflix.appinfo.InstanceInfo.PortType.UNSECURE;
+
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cloud.client.DefaultServiceInstance;
-import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.discovery.DiscoveryClient;
+import org.springframework.cloud.client.discovery.DiscoveryServiceInstance;
+import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import com.netflix.appinfo.InstanceInfo;
 import com.netflix.discovery.shared.Application;
 import com.netflix.discovery.shared.Applications;
-
-import static com.netflix.appinfo.InstanceInfo.PortType.*;
 
 /**
  * @author Spencer Gibb
@@ -51,8 +55,8 @@ public class EurekaDiscoveryClient implements DiscoveryClient {
 	}
 
 	@Override
-	public ServiceInstance getLocalServiceInstance() {
-		return new ServiceInstance() {
+	public DiscoveryServiceInstance getLocalServiceInstance() {
+		return new DiscoveryServiceInstance() {
 			@Override
 			public String getServiceId() {
 				return EurekaDiscoveryClient.this.config.getAppname();
@@ -77,21 +81,45 @@ public class EurekaDiscoveryClient implements DiscoveryClient {
 			public URI getUri() {
 				return DefaultServiceInstance.getUri(this);
 			}
+
+			@Override
+			public URI getHealthCheckUri() {
+				String url = isSecure() ? EurekaDiscoveryClient.this.config
+						.getSecureHealthCheckUrl() : EurekaDiscoveryClient.this.config
+						.getHealthCheckUrl();
+				if (StringUtils.hasText(url)) {
+					return URI.create(url);
+				}
+				return UriComponentsBuilder.fromUri(getUri())
+						.path(EurekaDiscoveryClient.this.config.getHealthCheckUrlPath())
+						.build().toUri();
+			}
+
+			@Override
+			public URI getStatusPageUri() {
+				String url = EurekaDiscoveryClient.this.config.getStatusPageUrl();
+				if (url != null) {
+					return URI.create(url);
+				}
+				return UriComponentsBuilder.fromUri(getUri())
+						.path(EurekaDiscoveryClient.this.config.getStatusPageUrlPath())
+						.build().toUri();
+			}
 		};
 	}
 
 	@Override
-	public List<ServiceInstance> getInstances(String serviceId) {
+	public List<DiscoveryServiceInstance> getInstances(String serviceId) {
 		List<InstanceInfo> infos = this.discovery.getInstancesByVipAddress(serviceId,
 				false);
-		List<ServiceInstance> instances = new ArrayList<ServiceInstance>();
+		List<DiscoveryServiceInstance> instances = new ArrayList<>();
 		for (InstanceInfo info : infos) {
 			instances.add(new EurekaServiceInstance(info));
 		}
 		return instances;
 	}
 
-	static class EurekaServiceInstance implements ServiceInstance {
+	static class EurekaServiceInstance implements DiscoveryServiceInstance {
 		private InstanceInfo instance;
 
 		EurekaServiceInstance(InstanceInfo instance) {
@@ -111,7 +139,8 @@ public class EurekaDiscoveryClient implements DiscoveryClient {
 		@Override
 		public int getPort() {
 			// assume if unsecure is enabled, that is the default
-			if (this.instance.isPortEnabled(UNSECURE) || !this.instance.isPortEnabled(SECURE)) {
+			if (this.instance.isPortEnabled(UNSECURE)
+					|| !this.instance.isPortEnabled(SECURE)) {
 				return this.instance.getPort();
 			}
 			return this.instance.getSecurePort();
@@ -125,6 +154,24 @@ public class EurekaDiscoveryClient implements DiscoveryClient {
 		@Override
 		public URI getUri() {
 			return DefaultServiceInstance.getUri(this);
+		}
+
+		@Override
+		public URI getHealthCheckUri() {
+			Set<String> healthChecks = this.instance.getHealthCheckUrls();
+			String url = null;
+			for (String hc : healthChecks) {
+				url = hc;
+				if (isSecure() && hc.startsWith("https")) {
+					break;
+				}
+			}
+			return URI.create(url);
+		}
+
+		@Override
+		public URI getStatusPageUri() {
+			return URI.create(this.instance.getStatusPageUrl());
 		}
 	}
 
